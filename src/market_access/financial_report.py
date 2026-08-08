@@ -15,14 +15,16 @@ from datetime import date
 
 import pandas as pd
 import vnstock
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from market_access.db import (
     DB_PATH,
+    Sector,
     StatementItem,
     StatementLine,
+    Symbol,
     ensure_period,
     ensure_statement_items,
     engine as _engine,
@@ -113,6 +115,9 @@ def init_financial_history(symbol: str) -> None:
     quarters with a free-tier key). update_latest_quarter grows real depth
     over time, one quarter at a time, from here on."""
     with Session(_engine) as session:
+        # fact_statement_line has a real FK to dim_symbol now (foreign_keys=ON
+        # in db.py) - the symbol has to exist there first or the insert fails.
+        sync_symbol_dimension(session)
         _fetch_and_store(symbol, session)
 
 
@@ -127,18 +132,12 @@ def _previous_quarter_label(today: date) -> str:
 
 
 def _has_period(symbol: str, period: str, session: Session) -> bool:
-    # balance_sheet alone stands in for "this symbol is up to date":
-    # _fetch_and_store always writes all 3 statement types for a symbol in
-    # the same transaction, so they can't independently fall out of sync.
-    stmt = (
-        select(StatementLine.symbol)
-        .where(
-            StatementLine.symbol == symbol,
-            StatementLine.statement == "balance_sheet",
-            StatementLine.period == period,
-        )
-        .limit(1)
-    )
+    # Any row is enough to stand in for "this symbol is up to date": statement
+    # type isn't part of the fact table's key anymore (it's reachable via
+    # item_id -> dim_statement_item), and _fetch_and_store always writes all
+    # 3 statement types for a symbol in the same transaction, so they can't
+    # independently fall out of sync.
+    stmt = select(StatementLine.symbol).where(StatementLine.symbol == symbol, StatementLine.period == period).limit(1)
     return session.execute(stmt).first() is not None
 
 
@@ -151,6 +150,9 @@ def update_latest_quarter(symbol: str) -> bool:
     with Session(_engine) as session:
         if _has_period(symbol, expected, session):
             return False
+        # Only synced on the fetch path, not the skip path above - keeps a
+        # fully-caught-up re-run genuinely zero-cost, not just zero-API-calls.
+        sync_symbol_dimension(session)
         _fetch_and_store(symbol, session)
         return True
 
@@ -206,13 +208,33 @@ if __name__ == "__main__":
     with Session(_engine) as session:
         rows = session.execute(select(StatementLine).where(StatementLine.symbol == "VNM")).all()
         periods = sorted({r[0].period for r in rows})
-    print(f"{len(rows)} line items stored for VNM, periods covered: {periods}")
+        print(f"{len(rows)} line items stored for VNM, periods covered: {periods}")
 
-    print("\n=== 2. Update latest quarter for VNM (should skip - just fetched) ===")
+        print("\n=== 2. Dimensional join: item breakdown by statement_type (via dim_statement_item) ===")
+        breakdown = session.execute(
+            select(StatementItem.statement_type, func.count())
+            .select_from(StatementLine)
+            .join(StatementItem, StatementLine.item_id == StatementItem.item_id)
+            .where(StatementLine.symbol == "VNM")
+            .group_by(StatementItem.statement_type)
+        ).all()
+        print(dict(breakdown))
+        assert set(dict(breakdown)) == set(_STATEMENTS), "expected all 3 statement types present"
+
+        print("\n=== 3. dim_symbol / dim_sector join for VNM vs VCB ===")
+        for sym in ("VNM", "VCB"):
+            row = session.get(Symbol, sym)
+            sector = session.get(Sector, row.icb_code) if row.icb_code else None
+            print(
+                f"{sym}: {row.organ_name!r}, sector={sector.icb_name if sector else None!r}, "
+                f"is_financial_sector={row.is_financial_sector}"
+            )
+
+    print("\n=== 4. Update latest quarter for VNM (should skip - just fetched) ===")
     did_fetch = update_latest_quarter("VNM")
     print(f"hit the API: {did_fetch} (expected False)")
     assert did_fetch is False, "expected a skip since VNM was just fully refreshed"
 
-    print("\n=== 3. Expected-quarter label sanity check ===")
+    print("\n=== 5. Expected-quarter label sanity check ===")
     today = date.today()
     print(f"today={today.isoformat()} -> previous completed quarter={_previous_quarter_label(today)}")

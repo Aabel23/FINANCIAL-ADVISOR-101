@@ -187,10 +187,26 @@ def ensure_statement_items(rows: list[dict], session: Session) -> None:
     session.execute(stmt)
 
 
-def sync_symbol_dimension(session: Session) -> int:
+_symbol_dim_synced_this_process = False
+
+
+def sync_symbol_dimension(session: Session, force: bool = False) -> int:
     """Populates dim_symbol + dim_sector from the market-wide ticker listing
     (price_access.get_ticker_listing - cached, one call for the whole
-    market, not per-symbol). Safe to re-run; upserts. Returns symbol count."""
+    market, not per-symbol). Safe to re-run; upserts.
+
+    Callers that process one symbol at a time (init_financial_history,
+    update_latest_quarter) call this every time for standalone safety, since
+    a fact row's FK to dim_symbol will fail otherwise. To keep that cheap
+    when those are run in a loop over the whole market, the actual listing
+    fetch + upsert only happens once per process (get_ticker_listing is also
+    day-cached underneath, but re-upserting ~2000 rows per symbol in a
+    ~1871-symbol loop still adds up) - pass force=True to bypass this.
+    """
+    global _symbol_dim_synced_this_process
+    if _symbol_dim_synced_this_process and not force:
+        return 0
+
     from market_access.price_access import get_ticker_listing
 
     listing = get_ticker_listing()
@@ -232,6 +248,7 @@ def sync_symbol_dimension(session: Session) -> int:
     )
     session.execute(stmt)
     session.commit()
+    _symbol_dim_synced_this_process = True
     return len(symbol_rows)
 
 
