@@ -28,6 +28,7 @@ from market_access.db import (
     ensure_period,
     ensure_statement_items,
     engine as _engine,
+    is_financial_sector,
     sync_symbol_dimension,
 )
 from market_access.price_access import DATA_SOURCE, get_stock_universe
@@ -227,7 +228,7 @@ if __name__ == "__main__":
             sector = session.get(Sector, row.icb_code) if row.icb_code else None
             print(
                 f"{sym}: {row.organ_name!r}, sector={sector.icb_name if sector else None!r}, "
-                f"is_financial_sector={row.is_financial_sector}"
+                f"com_type_code={row.com_type_code!r}, is_financial_sector={is_financial_sector(row.com_type_code)}"
             )
 
     print("\n=== 4. Update latest quarter for VNM (should skip - just fetched) ===")

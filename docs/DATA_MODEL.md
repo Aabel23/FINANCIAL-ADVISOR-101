@@ -2,11 +2,14 @@
 
 **Status: implemented and verified** in `src/market_access/db.py` (schema) and
 `src/market_access/financial_report.py` (loader), against real VNM/VCB data — see the
-verification note near the bottom. Two corrections from the original proposal, made after
+verification note near the bottom. Corrections from the original proposal, made after
 checking real data rather than assumption (details inline below): `dim_sector` has no
-`parent_icb_code` self-FK (vnstock's 4 ICB levels aren't linked that way in the data), and
-`is_financial_sector` lives on `dim_symbol`, derived from `com_type_code` (already reliable
-and already available) rather than from ICB sector-name matching.
+`parent_icb_code` self-FK (vnstock's 4 ICB levels aren't linked that way in the data);
+`is_financial_sector` is a plain function of `com_type_code`, not a stored column; and
+investment funds (`com_type_code == "QU"`) are excluded from `dim_symbol` entirely rather than
+flagged — they don't file the statements this schema exists to hold, so there's no reason to
+carry them at all. `is_fund` and `is_financial_sector` were briefly stored boolean columns on
+`dim_symbol`, dropped once it was clear `com_type_code` already says everything they encoded.
 
 The rest of this document is the original design reasoning, left as-is since it's still why
 the shape looks the way it does.
@@ -26,9 +29,9 @@ exists alongside `fact_statement_line` — company info shouldn't live twice.
         symbol (PK)                        item_id (PK)
         organ_name                         item_vi, item_en
         com_type_code                      statement_type (balance_sheet/income/cashflow)
-        is_fund (bool)                                ^
-        is_financial_sector (bool)                      |
-        icb_code -> dim_sector                            |
+        icb_code -> dim_sector                        ^
+        (funds excluded entirely -                      |
+         see is_financial_sector() below)                |
               ^                                            |
               |                                             |
               +-------------- fact_statement_line -------+
@@ -56,14 +59,16 @@ exists alongside `fact_statement_line` — company info shouldn't live twice.
         icb_name, icb_level
 ```
 
-**Correction from the original proposal**: vnstock's 4 ICB levels per symbol have no
+**Corrections from the original proposal**: vnstock's 4 ICB levels per symbol have no
 `parent_icb_code` in the data (confirmed live - e.g. AAA's codes are 1000/1300/1350/1353, not
 a prefix chain), so `dim_sector` is a flat lookup, not a self-referencing hierarchy.
-`dim_symbol.icb_code` points at the most specific (level-4) code available. Separately,
-`is_financial_sector` moved onto `dim_symbol` and is derived from `com_type_code` (`NH`=bank,
-`CK`=broker, `BH`=insurer - already present in the source listing, already reliable) rather
-than from matching ICB sector names, which turned out to be the weaker signal (VCB's "Ngân
-hàng" happens to repeat at every ICB level, but that's not guaranteed for every bank/broker).
+`dim_symbol.icb_code` points at the most specific (level-4) code available.
+`is_financial_sector(com_type_code)` is a plain function in `db.py`, not a stored column -
+`com_type_code` (`NH`=bank, `CK`=broker, `BH`=insurer, already present in the source listing,
+already reliable) is the source of truth, so deriving on demand beats storing a value that can
+drift out of sync. Same reasoning removed `is_fund`: funds (`com_type_code == "QU"`) are
+filtered out of `dim_symbol` before insert (`sync_symbol_dimension`), so no flag is needed -
+every row that exists is a real operating company/bank/broker/insurer, by construction.
 
 ## Grain — the one rule that matters most per table
 
@@ -107,3 +112,10 @@ sheet + 328 cash flow + 200 income statement, confirmed via a join through
 (`is_financial_sector=False`, sector "Thực phẩm") from VCB (`is_financial_sector=True`, sector
 "Ngân hàng"). The old flat `statement_lines` table has been dropped from
 `database/financial_reports.db`.
+
+Re-verified again after dropping `is_fund`/`is_financial_sector` and excluding funds: migrated
+the live DB in place (`DELETE ... WHERE com_type_code='QU'` removed 171 rows, then `ALTER TABLE
+... DROP COLUMN` x2 - SQLite 3.35+ supports this natively, no table-recreate needed).
+`sync_symbol_dimension()` now populates 1871 symbols (was 2042 with funds included, matching
+`get_stock_universe()`'s known count exactly), and `db.py`'s `__main__` asserts a known fund
+ticker (`FUEVFVND`, checked against the live listing first) is absent from `dim_symbol`.

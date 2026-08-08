@@ -66,17 +66,31 @@ class Sector(Base):
 
 
 class Symbol(Base):
-    """One row per ticker. Sector classification stored at ICB level 4 (most
-    specific available) as the single canonical classification for now."""
+    """One row per ticker. Investment funds are excluded entirely (see
+    sync_symbol_dimension) rather than flagged, so every remaining row is a
+    real operating company/bank/broker/insurer. Sector classification stored
+    at ICB level 4 (most specific available) as the single canonical
+    classification for now.
+
+    is_fund and is_financial_sector used to be stored columns here, derived
+    from com_type_code - dropped as redundant: com_type_code already says
+    what kind of business this is (CT=company, NH=bank, CK=broker,
+    BH=insurer; QU=fund, excluded before rows ever get here). Use
+    is_financial_sector(symbol.com_type_code) below instead of a stored flag."""
 
     __tablename__ = "dim_symbol"
 
     symbol: Mapped[str] = mapped_column(primary_key=True)
     organ_name: Mapped[str | None]
     com_type_code: Mapped[str]
-    is_fund: Mapped[bool]
-    is_financial_sector: Mapped[bool]
     icb_code: Mapped[str | None] = mapped_column(ForeignKey("dim_sector.icb_code"))
+
+
+def is_financial_sector(com_type_code: str) -> bool:
+    """Banks/brokers/insurers report fundamentally different statement
+    structures than an operating company (no "current assets"/"inventory"
+    concept) - not comparable with standard ratios."""
+    return com_type_code in _FINANCIAL_SECTOR_TYPE_CODES
 
 
 class StatementItem(Base):
@@ -222,15 +236,16 @@ def sync_symbol_dimension(session: Session, force: bool = False) -> int:
         )
         session.execute(stmt)
 
-    # Canonical sector per symbol = deepest (most specific) ICB level available.
-    deepest = listing.sort_values("icb_level").drop_duplicates(subset="symbol", keep="last")
+    # Funds excluded entirely - not operating businesses, don't file the
+    # statements this whole schema exists to hold. Canonical sector per
+    # symbol = deepest (most specific) ICB level available.
+    companies = listing[listing["com_type_code"] != "QU"]
+    deepest = companies.sort_values("icb_level").drop_duplicates(subset="symbol", keep="last")
     symbol_rows = [
         {
             "symbol": r.symbol,
             "organ_name": r.organ_name,
             "com_type_code": r.com_type_code,
-            "is_fund": r.com_type_code == "QU",
-            "is_financial_sector": r.com_type_code in _FINANCIAL_SECTOR_TYPE_CODES,
             "icb_code": r.icb_code,
         }
         for r in deepest.itertuples(index=False)
@@ -241,8 +256,6 @@ def sync_symbol_dimension(session: Session, force: bool = False) -> int:
         set_={
             "organ_name": stmt.excluded.organ_name,
             "com_type_code": stmt.excluded.com_type_code,
-            "is_fund": stmt.excluded.is_fund,
-            "is_financial_sector": stmt.excluded.is_financial_sector,
             "icb_code": stmt.excluded.icb_code,
         },
     )
@@ -260,11 +273,14 @@ if __name__ == "__main__":
 
         vnm = session.get(Symbol, "VNM")
         vcb = session.get(Symbol, "VCB")
-        print(f"VNM: organ_name={vnm.organ_name!r}, is_financial_sector={vnm.is_financial_sector}")
-        print(f"VCB: organ_name={vcb.organ_name!r}, is_financial_sector={vcb.is_financial_sector}")
-        assert vnm.is_financial_sector is False and vcb.is_financial_sector is True, (
+        print(f"VNM: organ_name={vnm.organ_name!r}, is_financial_sector={is_financial_sector(vnm.com_type_code)}")
+        print(f"VCB: organ_name={vcb.organ_name!r}, is_financial_sector={is_financial_sector(vcb.com_type_code)}")
+        assert is_financial_sector(vnm.com_type_code) is False and is_financial_sector(vcb.com_type_code) is True, (
             "expected VNM excluded=False (normal corp), VCB excluded=True (bank)"
         )
+
+        fund_symbol = session.get(Symbol, "FUEVFVND")  # a well-known ETF ticker
+        assert fund_symbol is None, "funds should be excluded from dim_symbol entirely"
 
         row = period_label_to_row("2026-Q2")
         print(f"period_label_to_row('2026-Q2') = {row}")
