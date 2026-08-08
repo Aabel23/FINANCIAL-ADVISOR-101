@@ -23,23 +23,32 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 .venv/Scripts/python.exe src/data_crawl
 
 ## Layout
 
-- `src/vnquant/` — the library. `data/` (vnstock wrappers + cache), `fundamentals/` (ratios,
-  Piotroski score), `timeseries/` (AR/ARIMA, GARCH, beta — hand-implemented), `scoring/`
-  (cross-sectional z-scores, composite index, ranking).
+- `src/market_access/` — data layer. `db.py` (shared SQLAlchemy star schema), `financial_report.py`
+  (statement ingestion), `price_access.py` (price fetch).
+- `src/valuation/` — `dcf.py`, `ddm.py`, `graham.py`, `nav.py`, `relative.py`, `rim.py`.
+- `src/regression/` — `ols.py`, `model_builder.py`, `diagnostics.py`, `universe.py`, `_features.py`.
+- `src/metrics/` — `error_metrics.py`.
+- `database/` — gitignored SQLite file (`financial_reports.db`) written by `market_access.db`.
 - `data_cache/` — gitignored parquet cache of vnstock fetches.
-- `backend/`, `frontend/` — FastAPI + React, added once the library is solid.
+
+Each folder under `src/` installs as its own top-level package (`pip install -e .` from
+`pyproject.toml`), so import as `from valuation import dcf`, not `from vnquant.valuation import dcf`.
 
 ## Workflow
 
-No separate demo/test folders. Every module is runnable standalone: each file gets its own
-`if __name__ == "__main__":` block that exercises it against real tickers and prints the
-result, so you can run that one file directly and read the output yourself, e.g.:
+No separate demo/test folders, no automated test suite. Every module runs standalone: it has
+an `if __name__ == "__main__":` block that exercises it against real tickers and prints the
+result, so you run that one file and read the output yourself, e.g.:
 
 ```bash
-.venv/Scripts/python.exe -m vnquant.data.cache
+.venv/Scripts/python.exe -m valuation.dcf
+.venv/Scripts/python.exe -m market_access.db
 ```
 
-Write the function -> run its file directly -> you check the output by hand (against
-cafef.vn, a broker app, or a hand calculation) -> commit once you're satisfied. Nothing is
-frozen or re-checked automatically — if you change something that an earlier module depends
-on, re-run that module's file again to confirm it still looks right.
+1. Write/change a function.
+2. Run its file directly.
+3. Check the printed output by hand (cafef.vn, a broker app, or a hand calculation).
+4. Commit once it looks right.
+
+Nothing is frozen or re-checked automatically — if you change a module that others depend on
+(e.g. `market_access/db.py`), re-run those dependents' files too to confirm they still look right.
