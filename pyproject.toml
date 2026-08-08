@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vnquant"
+version = "0.1.0"
+description = "Hand-built quantitative library for ranking Vietnam stock market equities"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.4,<3",
+    "pandas>=3.0,<4",
+    "scipy>=1.17,<2",
+    "vnstock==4.0.2",
+    "pyarrow>=24",
+    "sqlalchemy>=2",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi==0.139.*",
+    "uvicorn[standard]",
+    "alembic",
+]
+oracle = [
+    "statsmodels>=0.14",
+    "arch>=8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
