@@ -227,7 +227,11 @@ def sync_company_snapshot(symbol: str, session: Session) -> None:
 
     overview = _fetch_company_overview(symbol, use_cache=False)
     issue_share = float(overview["issue_share"].iloc[0])
-    dividend_per_share_tsr = float(overview["dividend_per_share_tsr"].iloc[0])
+    # None means vnstock has no trailing dividend on record for this symbol
+    # (no dividend paid, not missing data) - 0.0 is the correct value, not a
+    # crash. Confirmed live: KDC/DRC/HAG/... all return None here.
+    dividend_raw = overview["dividend_per_share_tsr"].iloc[0]
+    dividend_per_share_tsr = 0.0 if dividend_raw is None else float(dividend_raw)
     # Plain UPDATE, not upsert: dim_symbol.com_type_code/organ_name/icb_code
     # only come from sync_symbol_dimension (the market-wide listing), which
     # this function doesn't have data for - an upsert's INSERT branch would
