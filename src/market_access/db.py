@@ -10,6 +10,7 @@ above this layer (valuation/, regression/) goes through the DB only -
 nothing outside market_access/ calls vnstock directly.
 """
 
+import sqlite3
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -23,7 +24,33 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 DB_PATH = Path(__file__).resolve().parents[2] / "database" / "financial_reports.db"
+SQL_DUMP_PATH = DB_PATH.with_suffix(".sql")
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _restore_from_sql_dump() -> None:
+    """The .db file is gitignored (binary, not diffable); the .sql dump next
+    to it is the tracked source of truth. On a fresh clone there's no .db
+    yet, so rebuild it from the dump before the engine touches it."""
+    if DB_PATH.exists() or not SQL_DUMP_PATH.exists():
+        return
+    con = sqlite3.connect(DB_PATH)
+    con.executescript(SQL_DUMP_PATH.read_text(encoding="utf-8"))
+    con.close()
+
+
+def dump_to_sql() -> None:
+    """Write DB_PATH's full contents (schema + data) to SQL_DUMP_PATH. Run
+    this after changes and before committing, so the tracked .sql stays
+    current."""
+    con = sqlite3.connect(DB_PATH)
+    with open(SQL_DUMP_PATH, "w", encoding="utf-8") as f:
+        for line in con.iterdump():
+            f.write(f"{line}\n")
+    con.close()
+
+
+_restore_from_sql_dump()
 engine = create_engine(f"sqlite:///{DB_PATH}")
 
 

@@ -4,7 +4,6 @@ __pycache__/
 data_cache/
 stock_data/
 *.db
-!database/financial_reports.db
 .env
 node_modules/
 frontend/dist/
