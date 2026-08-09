@@ -18,8 +18,7 @@ income instead of dividends):
 Run this file directly to compute it for VNM against real data.
 """
 
-from market_access.price_access import get_company_overview
-from valuation._inputs import EQUITY, NET_INCOME, open_session, ttm_flow, latest_snapshot
+from valuation._inputs import EQUITY, NET_INCOME, current_price, latest_snapshot, open_session, shares_outstanding, ttm_flow
 
 
 def single_stage_value(bv0: float, roe: float, r: float, g: float) -> float:
@@ -41,9 +40,8 @@ def for_symbol(symbol: str, r: float, g: float) -> dict:
     with open_session() as session:
         net_income_ttm = ttm_flow(symbol, NET_INCOME, session)
         equity = latest_snapshot(symbol, EQUITY, session)
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
 
     bvps = equity / shares
     roe = net_income_ttm / equity
@@ -68,8 +66,14 @@ if __name__ == "__main__":
     print(f"bv0=100, roe=15%, r=12%, g=5% -> value={v} (expected {expected})")
     assert abs(v - expected) < 1e-9
 
-    print("\n=== RIM for VNM (r=13%, g=4% - illustrative, tune these yourself) ===")
-    result = for_symbol("VNM", r=0.13, g=0.04)
+    import sys
+
+    # DB only - never touches vnstock. If a symbol isn't loaded yet, run
+    # `python -m market_access.financial_report SYMBOL` and
+    # `python -m market_access.price_access SYMBOL` first (see README.md).
+    symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "VNM"
+    print(f"\n=== RIM for {symbol} (r=13%, g=4% - illustrative, tune these yourself) ===")
+    result = for_symbol(symbol, r=0.13, g=0.04)
     for k, v in result.items():
         print(f"{k}: {v:,.4f}" if isinstance(v, float) else f"{k}: {v}")
     print(

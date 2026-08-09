@@ -34,7 +34,6 @@ went into it.
 import numpy as np
 import pandas as pd
 
-from market_access.price_access import get_company_overview
 from regression.universe import SYMBOLS
 from valuation._inputs import (
     CURRENT_ASSETS,
@@ -46,8 +45,10 @@ from valuation._inputs import (
     REVENUE,
     SHORT_TERM_DEBT,
     TOTAL_ASSETS,
+    current_price,
     latest_snapshot,
     open_session,
+    shares_outstanding,
     ttm_flow,
     ttm_flow_prior_year,
 )
@@ -77,6 +78,8 @@ def _row_for(symbol: str, session) -> dict | None:
         current_liabilities = latest_snapshot(symbol, CURRENT_LIABILITIES, session)
         short_debt = latest_snapshot(symbol, SHORT_TERM_DEBT, session)
         long_debt = latest_snapshot(symbol, LONG_TERM_DEBT, session)
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
     except ValueError as e:
         print(f"{symbol}: skipped - {e}")
         return None
@@ -85,12 +88,9 @@ def _row_for(symbol: str, session) -> dict | None:
         print(f"{symbol}: skipped - non-positive/zero denominator in equity/revenue/current_liabilities/assets")
         return None
 
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
-    market_cap = float(overview["market_cap"].iloc[0])
-    if shares <= 0 or price <= 0 or market_cap <= 0:
-        print(f"{symbol}: skipped - non-positive shares/price/market_cap from company overview")
+    market_cap = price * shares  # not stored separately - DB only keeps price and shares, this is derived
+    if shares <= 0 or price <= 0:
+        print(f"{symbol}: skipped - non-positive shares/price")
         return None
 
     return {
@@ -122,16 +122,24 @@ def build_dataset(symbols: list[str] | None = None) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    print("=== Building the cross-sectional feature matrix (real data, all universe symbols) ===")
-    df = build_dataset()
+    import sys
+
+    # DB only - never touches vnstock. Missing symbols are skipped (with a
+    # printed reason) by build_dataset, not auto-fetched. Run
+    # `python -m regression.universe SYMBOL1 SYMBOL2 ...` first to backfill
+    # any symbol that isn't in the DB yet.
+    symbols = [s.upper() for s in sys.argv[1:]] or None
+    print(f"=== Building the cross-sectional feature matrix ({'custom symbols' if symbols else 'default 36-symbol universe'}) ===")
+    df = build_dataset(symbols)
     with pd.option_context("display.width", 160, "display.max_columns", 20):
         print(df)
 
-    print("\n=== Cross-check VNM's row against valuation/ modules' already-verified numbers ===")
-    vnm = df.loc["VNM"]
-    print(f"eps={vnm['eps']:,.0f} (expect 4,728 - matches graham.py's TTM EPS)")
-    print(f"bvps={vnm['bvps']:,.1f} (expect ~17,065.6 - matches graham.py/nav.py)")
-    print(f"roe={vnm['roe']:.4f} (expect ~0.3074 - matches rim.py)")
-    assert abs(vnm["eps"] - 4728) < 1
-    assert abs(vnm["bvps"] - 17065.6) < 1
-    assert abs(vnm["roe"] - 0.3074) < 1e-3
+    if "VNM" in df.index:
+        print("\n=== Cross-check VNM's row against valuation/ modules' already-verified numbers ===")
+        vnm = df.loc["VNM"]
+        print(f"eps={vnm['eps']:,.0f} (expect 4,728 - matches graham.py's TTM EPS)")
+        print(f"bvps={vnm['bvps']:,.1f} (expect ~17,065.6 - matches graham.py/nav.py)")
+        print(f"roe={vnm['roe']:.4f} (expect ~0.3074 - matches rim.py)")
+        assert abs(vnm["eps"] - 4728) < 1
+        assert abs(vnm["bvps"] - 17065.6) < 1
+        assert abs(vnm["roe"] - 0.3074) < 1e-3

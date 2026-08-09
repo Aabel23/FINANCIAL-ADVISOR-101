@@ -9,9 +9,7 @@ something this module infers (no sector-similarity scoring exists yet).
 Run this file directly to compute it for VNM against two real F&B peers.
 """
 
-from market_access.financial_report import init_financial_history
-from market_access.price_access import get_company_overview
-from valuation._inputs import EPS, EQUITY, latest_snapshot, open_session, ttm_flow
+from valuation._inputs import EPS, EQUITY, current_price, latest_snapshot, open_session, shares_outstanding, ttm_flow
 
 
 def peer_average_multiple(prices: list[float], per_share_metrics: list[float]) -> float:
@@ -30,22 +28,16 @@ def implied_value(multiple: float, target_metric: float) -> float:
 
 
 def _metrics_for(symbol: str) -> dict:
-    """EPS (TTM), BVPS (latest), and current price for one symbol - loads
-    the symbol's statement history first if it isn't in the DB yet (costs 3
-    API calls, once per symbol ever)."""
+    """EPS (TTM), BVPS (latest), and current price for one symbol. DB only -
+    never touches vnstock; raises (via valuation._inputs) if `symbol` isn't
+    loaded yet. Run `python -m market_access.financial_report SYMBOL` and
+    `python -m market_access.price_access SYMBOL` first for any peer that
+    isn't already in the DB."""
     with open_session() as session:
-        try:
-            eps_ttm = ttm_flow(symbol, EPS, session)
-            equity = latest_snapshot(symbol, EQUITY, session)
-        except ValueError:
-            session.close()
-            init_financial_history(symbol)
-            with open_session() as session2:
-                eps_ttm = ttm_flow(symbol, EPS, session2)
-                equity = latest_snapshot(symbol, EQUITY, session2)
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
+        eps_ttm = ttm_flow(symbol, EPS, session)
+        equity = latest_snapshot(symbol, EQUITY, session)
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
     return {"price": price, "eps_ttm": eps_ttm, "bvps": equity / shares}
 
 
@@ -76,8 +68,15 @@ if __name__ == "__main__":
     print(f"prices=[100,200], eps=[10,10] -> avg P/E={pe} (expected 15.0)")
     assert pe == 15.0
 
-    print("\n=== Relative valuation for VNM vs SAB, QNS (real F&B peers) ===")
-    result = for_symbol("VNM", ["SAB", "QNS"])
+    import sys
+
+    args = [a.upper() for a in sys.argv[1:]]
+    symbol, peer_symbols = (args[0], args[1:]) if args else ("VNM", ["SAB", "QNS"])
+    if not peer_symbols:
+        raise SystemExit(f"usage: python -m valuation.relative SYMBOL PEER1 [PEER2 ...] (got symbol={symbol!r}, no peers)")
+
+    print(f"\n=== Relative valuation for {symbol} vs {', '.join(peer_symbols)} ===")
+    result = for_symbol(symbol, peer_symbols)
     for k, v in result.items():
         print(f"{k}: {v:,.2f}" if isinstance(v, float) else f"{k}: {v}")
     print(

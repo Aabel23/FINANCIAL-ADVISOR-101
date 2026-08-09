@@ -1,12 +1,13 @@
 """
 Shared SQLAlchemy schema: a small star schema with dimension tables
 (dim_symbol, dim_sector, dim_statement_item, dim_period) and fact tables
-(fact_statement_line so far; fact_price and fact_ranking are planned but not
-built yet - see docs/DATA_MODEL.md for the full proposal and reasoning).
+(fact_statement_line, fact_price; fact_ranking is planned but not built yet -
+see docs/DATA_MODEL.md for the full proposal and reasoning).
 
-financial_report.py (and later price_access.py, for fact_price) both read
-and write through this one shared schema so dimensions aren't duplicated per
-fact table.
+financial_report.py and price_access.py both read and write through this one
+shared schema so dimensions aren't duplicated per fact table. Every reader
+above this layer (valuation/, regression/) goes through the DB only -
+nothing outside market_access/ calls vnstock directly.
 """
 
 import sys
@@ -76,7 +77,14 @@ class Symbol(Base):
     from com_type_code - dropped as redundant: com_type_code already says
     what kind of business this is (CT=company, NH=bank, CK=broker,
     BH=insurer; QU=fund, excluded before rows ever get here). Use
-    is_financial_sector(symbol.com_type_code) below instead of a stored flag."""
+    is_financial_sector(symbol.com_type_code) below instead of a stored flag.
+
+    issue_share/dividend_per_share_tsr are type-1 (overwrite, no history)
+    snapshots from vnstock's company overview call, refreshed by
+    price_access.sync_company_snapshot - same treatment as organ_name/
+    icb_code above. current_price is deliberately NOT stored here: it's
+    always the latest row in fact_price instead, so there's exactly one
+    place a price ever lives (see valuation._inputs.current_price)."""
 
     __tablename__ = "dim_symbol"
 
@@ -84,6 +92,8 @@ class Symbol(Base):
     organ_name: Mapped[str | None]
     com_type_code: Mapped[str]
     icb_code: Mapped[str | None] = mapped_column(ForeignKey("dim_sector.icb_code"))
+    issue_share: Mapped[float | None]
+    dividend_per_share_tsr: Mapped[float | None]
 
 
 def is_financial_sector(com_type_code: str) -> bool:
@@ -140,6 +150,26 @@ class StatementLine(Base):
     period: Mapped[str] = mapped_column(ForeignKey("dim_period.period"), primary_key=True)
     item_id: Mapped[str] = mapped_column(ForeignKey("dim_statement_item.item_id"), primary_key=True)
     value: Mapped[float | None]
+    fetched_on: Mapped[str]  # ISO date, for auditing/debugging only
+
+
+class Price(Base):
+    """One row per (symbol, date) of daily OHLCV. open/high/low/close are
+    raw VND (normalized at fetch time in price_access.py - vnstock's history
+    endpoint returns thousands of VND). Permanent, accumulating storage -
+    same convention as fact_statement_line, replacing price_access.py's old
+    day-only parquet cache. The most recent row per symbol IS this project's
+    "current price" - nothing else stores that value separately."""
+
+    __tablename__ = "fact_price"
+
+    symbol: Mapped[str] = mapped_column(ForeignKey("dim_symbol.symbol"), primary_key=True)
+    trade_date: Mapped[date] = mapped_column(primary_key=True)
+    open: Mapped[float]
+    high: Mapped[float]
+    low: Mapped[float]
+    close: Mapped[float]
+    volume: Mapped[float]
     fetched_on: Mapped[str]  # ISO date, for auditing/debugging only
 
 

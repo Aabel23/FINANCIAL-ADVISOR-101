@@ -15,8 +15,15 @@ silently returning a wrong number.
 Run this file directly to compute it for VNM against real data.
 """
 
-from market_access.price_access import get_company_overview
-from valuation._inputs import EQUITY, TOTAL_ASSETS, TOTAL_LIABILITIES, latest_snapshot, open_session
+from valuation._inputs import (
+    EQUITY,
+    TOTAL_ASSETS,
+    TOTAL_LIABILITIES,
+    current_price,
+    latest_snapshot,
+    open_session,
+    shares_outstanding,
+)
 
 
 def nav_per_share(total_assets: float, total_liabilities: float, shares: float) -> float:
@@ -30,9 +37,8 @@ def for_symbol(symbol: str) -> dict:
         assets = latest_snapshot(symbol, TOTAL_ASSETS, session)
         liabilities = latest_snapshot(symbol, TOTAL_LIABILITIES, session)
         equity_reported = latest_snapshot(symbol, EQUITY, session)
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
 
     net_assets = assets - liabilities
     discrepancy = abs(net_assets - equity_reported)
@@ -62,8 +68,14 @@ if __name__ == "__main__":
     print(f"assets=1000, liabilities=400, shares=60 -> nav_per_share={v} (expected 10.0)")
     assert v == 10.0
 
-    print("\n=== NAV for VNM (also checks Assets-Liabilities == reported Equity) ===")
-    result = for_symbol("VNM")
+    import sys
+
+    # DB only - never touches vnstock. If a symbol isn't loaded yet, run
+    # `python -m market_access.financial_report SYMBOL` and
+    # `python -m market_access.price_access SYMBOL` first (see README.md).
+    symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "VNM"
+    print(f"\n=== NAV for {symbol} (also checks Assets-Liabilities == reported Equity) ===")
+    result = for_symbol(symbol)
     for k, v in result.items():
         print(f"{k}: {v:,.2f}" if isinstance(v, float) else f"{k}: {v}")
     print(f"\ncurrent price {result['current_price']:,.0f} vs NAV {result['nav_per_share']:,.0f}")

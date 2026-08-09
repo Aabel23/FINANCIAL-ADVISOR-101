@@ -11,8 +11,7 @@ against its current price - see the __main__ block.
 
 import math
 
-from market_access.price_access import get_company_overview
-from valuation._inputs import EPS, EQUITY, open_session, ttm_flow, latest_snapshot
+from valuation._inputs import EPS, EQUITY, current_price, latest_snapshot, open_session, shares_outstanding, ttm_flow
 
 
 def graham_number(eps: float, bvps: float) -> float:
@@ -41,17 +40,19 @@ def graham_growth_value(eps: float, growth_pct: float, aaa_yield_pct: float, bas
 
 
 def for_symbol(symbol: str) -> dict:
-    """Pulls TTM EPS + latest BVPS for `symbol` from the local DB/price
-    access and returns the Graham Number alongside the inputs used, so the
-    caller can see exactly what went into it. Growth-adjusted value isn't
-    included here since it needs a growth rate + bond yield you have to
-    choose - call graham_growth_value directly once you have those."""
+    """Pulls TTM EPS + latest BVPS for `symbol` from the local DB and returns
+    the Graham Number alongside the inputs used, so the caller can see
+    exactly what went into it. DB only - no live vnstock call; run
+    market_access.financial_report.init_financial_history(symbol) and
+    market_access.price_access.init_symbol_market_data(symbol) first if
+    `symbol` isn't loaded yet. Growth-adjusted value isn't included here
+    since it needs a growth rate + bond yield you have to choose - call
+    graham_growth_value directly once you have those."""
     with open_session() as session:
         eps_ttm = ttm_flow(symbol, EPS, session)
         equity = latest_snapshot(symbol, EQUITY, session)
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
     bvps = equity / shares
     return {
         "symbol": symbol,
@@ -64,8 +65,14 @@ def for_symbol(symbol: str) -> dict:
 
 
 if __name__ == "__main__":
-    result = for_symbol("VNM")
-    print("=== Graham Number for VNM ===")
+    import sys
+
+    # DB only - never touches vnstock. If a symbol isn't loaded yet, run
+    # `python -m market_access.financial_report SYMBOL` and
+    # `python -m market_access.price_access SYMBOL` first (see README.md).
+    symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "VNM"
+    result = for_symbol(symbol)
+    print(f"=== Graham Number for {symbol} ===")
     for k, v in result.items():
         print(f"{k}: {v:,.2f}" if isinstance(v, float) else f"{k}: {v}")
     print(

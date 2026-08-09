@@ -14,13 +14,14 @@ sum, not sign-juggling three separate subtractions.
 Run this file directly to compute it for VNM against real data.
 """
 
-from market_access.price_access import get_company_overview
 from valuation._inputs import (
     CAPEX,
     LOAN_PROCEEDS,
     LOAN_REPAYMENT,
     OPERATING_CASH_FLOW,
+    current_price,
     open_session,
+    shares_outstanding,
     ttm_flow,
 )
 
@@ -62,9 +63,9 @@ def for_symbol(symbol: str, r: float, g1: float, years1: int, g_terminal: float)
     two-stage discount. r/g1/g_terminal are genuine assumptions you supply -
     no library default, same reasoning as ddm.for_symbol."""
     fcfe0_total = fcfe_ttm(symbol)
-    overview = get_company_overview(symbol)
-    shares = float(overview["issue_share"].iloc[0])
-    price = float(overview["current_price"].iloc[0])
+    with open_session() as session:
+        shares = shares_outstanding(symbol, session)
+        price = current_price(symbol, session)
     fcfe0_per_share = fcfe0_total / shares
     return {
         "symbol": symbol,
@@ -89,8 +90,14 @@ if __name__ == "__main__":
     print(f"fcfe0=10, years1=0, g_terminal=5%, r=10% -> value={v} (expected {expected})")
     assert abs(v - expected) < 1e-9
 
-    print("\n=== FCFE DCF for VNM (r=13%, g1=6% for 5y, g_terminal=3% - illustrative) ===")
-    result = for_symbol("VNM", r=0.13, g1=0.06, years1=5, g_terminal=0.03)
+    import sys
+
+    # DB only - never touches vnstock. If a symbol isn't loaded yet, run
+    # `python -m market_access.financial_report SYMBOL` and
+    # `python -m market_access.price_access SYMBOL` first (see README.md).
+    symbol = sys.argv[1].upper() if len(sys.argv) > 1 else "VNM"
+    print(f"\n=== FCFE DCF for {symbol} (r=13%, g1=6% for 5y, g_terminal=3% - illustrative) ===")
+    result = for_symbol(symbol, r=0.13, g1=0.06, years1=5, g_terminal=0.03)
     for k, val in result.items():
         print(f"{k}: {val:,.2f}" if isinstance(val, float) else f"{k}: {val}")
     print(

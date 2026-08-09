@@ -47,26 +47,39 @@ SYMBOLS = [
 
 
 def ensure_loaded(symbols: list[str] | None = None) -> None:
-    """Loads statement history for every symbol in `symbols` (default:
-    SYMBOLS) that isn't in the DB yet. Safe/cheap to re-run - only symbols
-    actually missing hit the API (init_financial_history is itself an
-    upsert, but we skip the call entirely for symbols already present)."""
+    """Loads statement history AND price/shares/dividend snapshot data for
+    every symbol in `symbols` (default: SYMBOLS) that isn't in the DB yet -
+    _features.py's _row_for needs both. Safe/cheap to re-run - only symbols
+    actually missing hit the API (init_financial_history/
+    init_symbol_market_data are themselves upserts, but we skip the call
+    entirely for symbols already present)."""
+    from market_access.db import Price, StatementLine
+    from market_access.price_access import init_market_prices
+
     symbols = symbols or SYMBOLS
     with Session(engine) as session:
-        existing = {s.symbol for s in session.query(Symbol.symbol).filter(Symbol.symbol.in_(symbols))}
         # dim_symbol has all ~2000 listed tickers synced already (see
         # market_access.db.sync_symbol_dimension) - that's not what we're
-        # checking. What matters is whether fact_statement_line has data.
-        from market_access.db import StatementLine
-
-        loaded = {
+        # checking. What matters is whether the fact tables have data.
+        statements_loaded = {
             r[0] for r in session.query(StatementLine.symbol).filter(StatementLine.symbol.in_(symbols)).distinct()
         }
-    missing = [s for s in symbols if s not in loaded]
-    print(f"{len(loaded)}/{len(symbols)} already loaded, fetching {len(missing)} (rate-limited, ~3 calls/symbol)")
-    if missing:
-        init_market_financials(missing)  # throttled + per-symbol error handling, see market_access/financial_report.py
+        prices_loaded = {r[0] for r in session.query(Price.symbol).filter(Price.symbol.in_(symbols)).distinct()}
+
+    missing_statements = [s for s in symbols if s not in statements_loaded]
+    missing_prices = [s for s in symbols if s not in prices_loaded]
+    print(
+        f"{len(statements_loaded)}/{len(symbols)} have statements (fetching {len(missing_statements)}), "
+        f"{len(prices_loaded)}/{len(symbols)} have price data (fetching {len(missing_prices)})"
+    )
+    if missing_statements:
+        init_market_financials(missing_statements)  # throttled, see market_access/financial_report.py
+    if missing_prices:
+        init_market_prices(missing_prices)  # throttled, see market_access/price_access.py
 
 
 if __name__ == "__main__":
-    ensure_loaded()
+    import sys
+
+    symbols = [s.upper() for s in sys.argv[1:]] or None
+    ensure_loaded(symbols)

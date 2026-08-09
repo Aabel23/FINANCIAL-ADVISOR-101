@@ -201,7 +201,36 @@ def update_market_financials(symbols: list[str] | None = None) -> None:
     print(f"\ndone: {fetched} fetched, {skipped} skipped, {failed} failed")
 
 
+def _run_for_symbol(symbol: str) -> None:
+    """Real single-symbol usage: python -m market_access.financial_report FPT"""
+    print(f"=== DB: {DB_PATH} ===")
+    did_fetch = update_latest_quarter(symbol)
+    with Session(_engine) as session:
+        rows = session.execute(select(StatementLine).where(StatementLine.symbol == symbol)).all()
+        if not rows:
+            print(f"{symbol}: no statement data found - check the symbol is a real, non-fund ticker")
+            return
+        periods = sorted({r[0].period for r in rows})
+        print(f"{symbol}: hit the API this run: {did_fetch}. {len(rows)} line items stored, periods: {periods}")
+
+
+def _run_for_all() -> None:
+    """Whole-market usage: python -m market_access.financial_report all"""
+    print(f"=== DB: {DB_PATH} ===")
+    update_market_financials()
+
+
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].upper()
+        if arg == "ALL":
+            _run_for_all()
+        else:
+            _run_for_symbol(arg)
+        raise SystemExit(0)
+
     print(f"=== DB: {DB_PATH} ===")
 
     print("\n=== 1. Init financial history for VNM ===")

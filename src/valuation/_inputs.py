@@ -20,7 +20,7 @@ standard approximation, not exact - noted where used.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from market_access.db import StatementLine, engine
+from market_access.db import Price, StatementLine, Symbol, engine
 
 # Item ids from dim_statement_item (see docs/DATA_MODEL.md for the full list).
 EPS = "isa23"  # Lãi cơ bản trên cổ phiếu (VND) - EPS basic, per quarter
@@ -49,7 +49,7 @@ def latest_period(symbol: str, session: Session) -> str:
     )
     period = session.execute(stmt).scalar_one_or_none()
     if period is None:
-        raise ValueError(f"{symbol}: no statement data loaded - run init_financial_history({symbol!r}) first")
+        raise ValueError(f"{symbol}: no statement data loaded - run `python -m market_access.financial_report {symbol}` first")
     return period
 
 
@@ -115,6 +115,41 @@ def latest_snapshot(symbol: str, item_id: str, session: Session) -> float:
     if value is None:
         raise ValueError(f"{symbol}/{item_id}: no value for latest period {period!r}")
     return value
+
+
+def current_price(symbol: str, session: Session) -> float:
+    """Latest stored close from fact_price - this project's one definition
+    of "current price" (see market_access.db.Symbol docstring: it's
+    deliberately not duplicated as a dim_symbol column). Requires
+    price_access.sync_price_history(symbol, ...) to have run at least once -
+    raises rather than falling back to a live vnstock call, same "DB only"
+    convention as the statement-based helpers above."""
+    stmt = select(Price.close).where(Price.symbol == symbol).order_by(Price.trade_date.desc()).limit(1)
+    price = session.execute(stmt).scalar_one_or_none()
+    if price is None:
+        raise ValueError(f"{symbol}: no price data loaded - run `python -m market_access.price_access {symbol}` first")
+    return price
+
+
+def shares_outstanding(symbol: str, session: Session) -> float:
+    """dim_symbol.issue_share - refreshed by price_access.sync_company_snapshot."""
+    symbol_row = session.get(Symbol, symbol)
+    if symbol_row is None or symbol_row.issue_share is None:
+        raise ValueError(
+            f"{symbol}: no issue_share loaded - run `python -m market_access.price_access {symbol}` first"
+        )
+    return symbol_row.issue_share
+
+
+def trailing_dividend_per_share(symbol: str, session: Session) -> float:
+    """dim_symbol.dividend_per_share_tsr - refreshed by
+    price_access.sync_company_snapshot. Used by ddm.py's D0."""
+    symbol_row = session.get(Symbol, symbol)
+    if symbol_row is None or symbol_row.dividend_per_share_tsr is None:
+        raise ValueError(
+            f"{symbol}: no dividend_per_share_tsr loaded - run `python -m market_access.price_access {symbol}` first"
+        )
+    return symbol_row.dividend_per_share_tsr
 
 
 def open_session() -> Session:

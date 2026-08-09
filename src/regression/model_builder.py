@@ -185,7 +185,20 @@ def build_model(df) -> dict:
 
 
 if __name__ == "__main__":
-    df = build_dataset()
+    import sys
+
+    # DB only - never touches vnstock. Missing symbols are skipped (with a
+    # printed reason) by build_dataset, not auto-fetched. Run
+    # `python -m regression.universe SYMBOL1 SYMBOL2 ...` first to backfill
+    # any symbol that isn't in the DB yet.
+    symbols = [s.upper() for s in sys.argv[1:]] or None
+    print(f"=== Building regression model ({'custom symbols' if symbols else 'default 36-symbol universe'}) ===")
+    if symbols and len(symbols) < 10:
+        print(
+            "warning: OLS with this few observations relative to 9 candidate variables is unstable - "
+            "the default universe (36 symbols) was sized for this reason, see regression/universe.py"
+        )
+    df = build_dataset(symbols)
     chosen = build_model(df)
     r = chosen["result"]
     print(f"\nFinal variables kept: {[f for f in r.feature_names if f != 'const']}")
