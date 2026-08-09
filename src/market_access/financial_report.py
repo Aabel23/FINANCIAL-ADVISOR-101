@@ -20,7 +20,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from market_access.db import (
-    DB_PATH,
+    SQL_DUMP_PATH,
     Sector,
     StatementItem,
     StatementLine,
@@ -203,7 +203,7 @@ def update_market_financials(symbols: list[str] | None = None) -> None:
 
 def _run_for_symbol(symbol: str) -> None:
     """Real single-symbol usage: python -m market_access.financial_report FPT"""
-    print(f"=== DB: {DB_PATH} ===")
+    print(f"=== DB: {SQL_DUMP_PATH} ===")
     did_fetch = update_latest_quarter(symbol)
     with Session(_engine) as session:
         rows = session.execute(select(StatementLine).where(StatementLine.symbol == symbol)).all()
@@ -216,7 +216,7 @@ def _run_for_symbol(symbol: str) -> None:
 
 def _run_for_all() -> None:
     """Whole-market usage: python -m market_access.financial_report all"""
-    print(f"=== DB: {DB_PATH} ===")
+    print(f"=== DB: {SQL_DUMP_PATH} ===")
     update_market_financials()
 
 
@@ -231,7 +231,7 @@ if __name__ == "__main__":
             _run_for_symbol(arg)
         raise SystemExit(0)
 
-    print(f"=== DB: {DB_PATH} ===")
+    print(f"=== DB: {SQL_DUMP_PATH} ===")
 
     print("\n=== 1. Init financial history for VNM ===")
     init_financial_history("VNM")

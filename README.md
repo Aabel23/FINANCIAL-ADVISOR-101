@@ -28,7 +28,9 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 .venv/Scripts/python.exe src/data_crawl
 - `src/valuation/` — `dcf.py`, `ddm.py`, `graham.py`, `nav.py`, `relative.py`, `rim.py`.
 - `src/regression/` — `ols.py`, `model_builder.py`, `diagnostics.py`, `universe.py`, `_features.py`.
 - `src/metrics/` — `error_metrics.py`.
-- `database/` — gitignored SQLite file (`financial_reports.db`) written by `market_access.db`.
+- `database/` — `financial_reports.sql` (tracked in git, the source of truth: full schema+data
+  dump) and `financial_reports.db` (gitignored SQLite file the app actually reads/writes,
+  rebuilt from the `.sql` automatically on first use if missing — see `db._restore_from_sql_dump`).
 - `data_cache/` — gitignored parquet cache of vnstock fetches.
 
 Each folder under `src/` installs as its own top-level package (`pip install -e .` from
@@ -48,7 +50,10 @@ result, so you run that one file and read the output yourself, e.g.:
 1. Write/change a function.
 2. Run its file directly.
 3. Check the printed output by hand (cafef.vn, a broker app, or a hand calculation).
-4. Commit once it looks right.
+4. If the change touched the database, run `market_access.db.dump_to_sql()` to refresh
+   `database/financial_reports.sql` before committing — that file is the tracked source of
+   truth, not the gitignored `.db`.
+5. Commit once it looks right.
 
 Nothing is frozen or re-checked automatically — if you change a module that others depend on
 (e.g. `market_access/db.py`), re-run those dependents' files too to confirm they still look right.

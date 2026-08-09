@@ -10,7 +10,7 @@ above this layer (valuation/, regression/) goes through the DB only -
 nothing outside market_access/ calls vnstock directly.
 """
 
-import sqlite3
+import atexit
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,40 +18,26 @@ from pathlib import Path
 from sqlalchemy import ForeignKey, create_engine, event
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.pool import StaticPool
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
-DB_PATH = Path(__file__).resolve().parents[2] / "database" / "financial_reports.db"
-SQL_DUMP_PATH = DB_PATH.with_suffix(".sql")
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+# database/financial_reports.sql is the only artifact that ever touches disk -
+# no .db file. The engine below runs SQLite entirely in memory, loaded from
+# this dump at import time and written back to it at process exit, so there's
+# exactly one database file to track/back up/reason about, ever.
+SQL_DUMP_PATH = Path(__file__).resolve().parents[2] / "database" / "financial_reports.sql"
+SQL_DUMP_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-
-def _restore_from_sql_dump() -> None:
-    """The .db file is gitignored (binary, not diffable); the .sql dump next
-    to it is the tracked source of truth. On a fresh clone there's no .db
-    yet, so rebuild it from the dump before the engine touches it."""
-    if DB_PATH.exists() or not SQL_DUMP_PATH.exists():
-        return
-    con = sqlite3.connect(DB_PATH)
-    con.executescript(SQL_DUMP_PATH.read_text(encoding="utf-8"))
-    con.close()
-
-
-def dump_to_sql() -> None:
-    """Write DB_PATH's full contents (schema + data) to SQL_DUMP_PATH. Run
-    this after changes and before committing, so the tracked .sql stays
-    current."""
-    con = sqlite3.connect(DB_PATH)
-    with open(SQL_DUMP_PATH, "w", encoding="utf-8") as f:
-        for line in con.iterdump():
-            f.write(f"{line}\n")
-    con.close()
-
-
-_restore_from_sql_dump()
-engine = create_engine(f"sqlite:///{DB_PATH}")
+# StaticPool: SQLAlchemy's default pool hands out a fresh connection per
+# checkout, and a fresh ":memory:" connection is a fresh *empty* database -
+# StaticPool keeps the single underlying connection alive for the process so
+# the in-memory data actually persists across uses.
+engine = create_engine(
+    "sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False}
+)
 
 
 @event.listens_for(engine, "connect")
@@ -60,6 +46,30 @@ def _enable_foreign_keys(dbapi_connection, _):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+
+
+def dump_to_sql() -> None:
+    """Serialize the in-memory db to SQL_DUMP_PATH (schema + data). Registered
+    below to run automatically at process exit - including after an uncaught
+    exception - so nothing needs to remember to call this by hand."""
+    raw = engine.raw_connection()
+    try:
+        with open(SQL_DUMP_PATH, "w", encoding="utf-8") as f:
+            for line in raw.driver_connection.iterdump():
+                f.write(f"{line}\n")
+    finally:
+        raw.close()
+
+
+_HAS_EXISTING_DUMP = SQL_DUMP_PATH.exists()
+if _HAS_EXISTING_DUMP:
+    _raw = engine.raw_connection()
+    try:
+        _raw.driver_connection.executescript(SQL_DUMP_PATH.read_text(encoding="utf-8"))
+    finally:
+        _raw.close()
+
+atexit.register(dump_to_sql)
 
 
 class Base(DeclarativeBase):
@@ -200,7 +210,8 @@ class Price(Base):
     fetched_on: Mapped[str]  # ISO date, for auditing/debugging only
 
 
-Base.metadata.create_all(engine)
+if not _HAS_EXISTING_DUMP:
+    Base.metadata.create_all(engine)
 
 
 _QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
@@ -323,7 +334,7 @@ def sync_symbol_dimension(session: Session, force: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    print(f"=== DB: {DB_PATH} ===")
+    print(f"=== DB: {SQL_DUMP_PATH} ===")
     with Session(engine) as session:
         n = sync_symbol_dimension(session)
         print(f"dim_symbol synced: {n} symbols")
